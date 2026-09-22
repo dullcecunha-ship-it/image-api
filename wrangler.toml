@@ -5,5 +5,7 @@ compatibility_date = "2025-01-01"
 [ai]
 binding = "AI"
 
-[vars]
-API_KEY = "kabirx"
+[[d1_databases]]
+binding = "DB"
+database_name = "kabirx-db"
+database_id = "YOUR_D1_DATABASE_ID"
