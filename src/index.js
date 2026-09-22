@@ -1,9 +1,10 @@
 // ============================================
-// Image Generation API v2.1.0
+// Image Generation API v2.2.0
 // Default format: raw (image displays directly)
+// Fixed: double-encoding bug in prompt
 // ============================================
 
-const SERVICE = { name: 'image-api', version: '2.1.0' };
+const SERVICE = { name: 'image-api', version: '2.2.0' };
 
 const STYLES = {
   photo:  { model: 'flux-realism', prefix: 'photorealistic, detailed, 85mm lens, natural lighting, ' },
@@ -53,6 +54,7 @@ export default {
 
     const url = new URL(request.url);
 
+    // ---------- Service info ----------
     if (url.pathname === '/' && request.method === 'GET') {
       return json({
         service: SERVICE.name,
@@ -70,22 +72,29 @@ export default {
       }, 200, cors, security);
     }
 
+    // ---------- Health ----------
     if (url.pathname === '/v1/health' && request.method === 'GET') {
       return json({ status: 'ok', timestamp: new Date().toISOString() }, 200, cors, security);
     }
 
+    // ---------- Styles ----------
     if (url.pathname === '/v1/styles' && request.method === 'GET') {
       return json({
         styles: Object.entries(STYLES).map(([id, s]) => ({
-          id, model: s.model, sample: s.prefix || '(none)',
+          id,
+          model: s.model,
+          sample: s.prefix || '(none)',
         })),
       }, 200, cors, security);
     }
 
+    // ---------- Ratios ----------
     if (url.pathname === '/v1/ratios' && request.method === 'GET') {
       return json({
         ratios: Object.entries(RATIOS).map(([r, [w, h]]) => ({
-          ratio: r, width: w, height: h,
+          ratio: r,
+          width: w,
+          height: h,
         })),
       }, 200, cors, security);
     }
@@ -98,7 +107,9 @@ export default {
       }
 
       const prompt = (url.searchParams.get('prompt') || '').trim();
-      if (!prompt) return error(400, 'invalid_request', "'prompt' is required", cors, security);
+      if (!prompt) {
+        return error(400, 'invalid_request', "'prompt' is required", cors, security);
+      }
 
       const ttl = clampInt(url.searchParams.get('ttl'), 60, 604800, 3600);
       const exp = Math.floor(Date.now() / 1000) + ttl;
@@ -117,10 +128,9 @@ export default {
       };
 
       const token = await encodeToken(payload, env.SIGNING_SECRET || env.API_KEY);
-      const origin = url.origin;
 
       return json({
-        url: `${origin}/i/${token}`,
+        url: `${url.origin}/i/${token}`,
         expires: exp,
         expires_in: ttl,
       }, 200, cors, security);
@@ -130,39 +140,42 @@ export default {
     if (url.pathname.startsWith('/i/') && request.method === 'GET') {
       const token = url.pathname.slice(3);
       const payload = await decodeToken(token, env.SIGNING_SECRET || env.API_KEY);
-      if (!payload) return error(403, 'invalid_token', 'Invalid or tampered token', cors, security);
+      if (!payload) {
+        return error(403, 'invalid_token', 'Invalid or tampered token', cors, security);
+      }
       if (payload.x < Math.floor(Date.now() / 1000)) {
         return error(410, 'expired', 'Signed URL has expired', cors, security);
       }
 
-      const dims = resolveDimensions(payload.r, payload.w ? parseInt(payload.w) : null, payload.h ? parseInt(payload.h) : null);
-      const imageUrl = buildImageUrl(
-        payload.p, dims.width, dims.height, payload.s, payload.n,
-        payload.e === 1, payload.c === 1, payload.u ? parseInt(payload.u) : 1, null
+      const dims = resolveDimensions(
+        payload.r,
+        payload.w ? parseInt(payload.w) : null,
+        payload.h ? parseInt(payload.h) : null
       );
 
-      try {
-        const imgRes = await fetch(imageUrl);
-        if (!imgRes.ok) throw new Error(`Upstream ${imgRes.status}`);
-        return new Response(imgRes.body, {
-          status: 200,
-          headers: {
-            'Content-Type': imgRes.headers.get('Content-Type') || 'image/jpeg',
-            'Cache-Control': 'public, max-age=3600',
-            ...cors,
-            ...security,
-          },
-        });
-      } catch {
-        return error(502, 'upstream_error', 'Image could not be generated', cors, security);
-      }
+      const imageUrl = buildImageUrl(
+        payload.p,
+        dims.width,
+        dims.height,
+        payload.s,
+        payload.n,
+        payload.e === 1,
+        payload.c === 1,
+        payload.u ? parseInt(payload.u) : 1,
+        null
+      );
+
+      // Redirect browser straight to the image
+      return Response.redirect(imageUrl, 302);
     }
 
     // ---------- Generate ----------
     if (url.pathname === '/v1/image') {
       const isGet = request.method === 'GET';
       const isPost = request.method === 'POST';
-      if (!isGet && !isPost) return error(405, 'method_not_allowed', 'Use GET or POST', cors, security);
+      if (!isGet && !isPost) {
+        return error(405, 'method_not_allowed', 'Use GET or POST', cors, security);
+      }
 
       let source, key;
       if (isGet) {
@@ -170,7 +183,9 @@ export default {
         key = source.get('key');
       } else {
         let body;
-        try { body = await request.json(); } catch {
+        try {
+          body = await request.json();
+        } catch {
           return error(400, 'invalid_request', 'Body must be valid JSON', cors, security);
         }
         source = body;
@@ -185,28 +200,45 @@ export default {
       const get = (n) => (source.get ? source.get(n) : source[n]);
 
       const prompt = String(get('prompt') || '').trim();
-      if (!prompt) return error(400, 'invalid_request', "'prompt' is required", cors, security);
-      if (prompt.length > 2000) return error(400, 'invalid_request', "'prompt' exceeds 2000 chars", cors, security);
+      if (!prompt) {
+        return error(400, 'invalid_request', "'prompt' is required", cors, security);
+      }
+      if (prompt.length > 2000) {
+        return error(400, 'invalid_request', "'prompt' exceeds 2000 chars", cors, security);
+      }
 
       const negative = String(get('negative') || '').trim();
+
       const style = validateStyle(get('style'));
-      if (style === null) return error(400, 'invalid_request', "'style' is not supported. GET /v1/styles", cors, security);
+      if (style === null) {
+        return error(400, 'invalid_request', "'style' is not supported. GET /v1/styles", cors, security);
+      }
 
       const ratio = validateRatio(get('ratio'));
-      if (ratio === null) return error(400, 'invalid_request', "'ratio' is not supported. GET /v1/ratios", cors, security);
+      if (ratio === null) {
+        return error(400, 'invalid_request', "'ratio' is not supported. GET /v1/ratios", cors, security);
+      }
 
       const widthOverride = get('width') ? clampInt(get('width'), 256, 1536, null) : null;
       const heightOverride = get('height') ? clampInt(get('height'), 256, 1536, null) : null;
-      if (get('width') && widthOverride === null) return error(400, 'invalid_request', "'width' must be 256–1536", cors, security);
-      if (get('height') && heightOverride === null) return error(400, 'invalid_request', "'height' must be 256–1536", cors, security);
+      if (get('width') && widthOverride === null) {
+        return error(400, 'invalid_request', "'width' must be 256–1536", cors, security);
+      }
+      if (get('height') && heightOverride === null) {
+        return error(400, 'invalid_request', "'height' must be 256–1536", cors, security);
+      }
 
       const dims = resolveDimensions(ratio, widthOverride, heightOverride);
 
       const n = clampInt(get('n'), 1, 4, 1);
-      if (n === null) return error(400, 'invalid_request', "'n' must be 1–4", cors, security);
+      if (n === null) {
+        return error(400, 'invalid_request', "'n' must be 1–4", cors, security);
+      }
 
       const upscale = clampInt(get('upscale'), 1, 4, 1);
-      if (upscale === null) return error(400, 'invalid_request', "'upscale' must be 1–4", cors, security);
+      if (upscale === null) {
+        return error(400, 'invalid_request', "'upscale' must be 1–4", cors, security);
+      }
 
       const enhance = get('enhance') === 'true' || get('enhance') === true;
       const crop = get('crop') !== 'false' && get('crop') !== false;
@@ -221,19 +253,35 @@ export default {
       } else {
         const accept = request.headers.get('Accept') || '';
         if (accept.includes('application/json')) format = 'json';
-        else format = 'raw'; // default
+        else format = 'raw';
       }
 
       const allowedFormats = ['json', 'raw', 'base64', 'markdown', 'html', 'redirect'];
       if (!allowedFormats.includes(format)) {
-        return error(400, 'invalid_request', `'format' must be one of: ${allowedFormats.join(', ')}`, cors, security);
+        return error(
+          400,
+          'invalid_request',
+          `'format' must be one of: ${allowedFormats.join(', ')}`,
+          cors,
+          security
+        );
       }
 
-      // Build all image URLs
+      // ---------- Build image URLs ----------
       const images = [];
       for (let i = 0; i < n; i++) {
         const seed = baseSeed !== null ? baseSeed + i : Math.floor(Math.random() * 1e9);
-        const imageUrl = buildImageUrl(prompt, dims.width, dims.height, style, negative, enhance, crop, upscale, seed);
+        const imageUrl = buildImageUrl(
+          prompt,
+          dims.width,
+          dims.height,
+          style,
+          negative,
+          enhance,
+          crop,
+          upscale,
+          seed
+        );
         const actualHeight = crop ? Math.floor(dims.height * 0.94) : dims.height;
         images.push({ url: imageUrl, width: dims.width, height: actualHeight, seed });
       }
@@ -245,30 +293,23 @@ export default {
       }
 
       if (format === 'raw') {
-        try {
-          const imgRes = await fetch(images[0].url);
-          if (!imgRes.ok) throw new Error(`Upstream ${imgRes.status}`);
-          return new Response(imgRes.body, {
-            status: 200,
-            headers: {
-              'Content-Type': imgRes.headers.get('Content-Type') || 'image/jpeg',
-              'Cache-Control': 'public, max-age=3600',
-              ...cors,
-              ...security,
-            },
-          });
-        } catch {
-          return error(502, 'upstream_error', 'Image could not be generated', cors, security);
-        }
+        // Redirect the browser straight to the image.
+        // Avoids Worker timeouts, 502 upstream errors, and doubles as caching.
+        return Response.redirect(images[0].url, 302);
       }
 
       if (format === 'base64') {
-        const results = await Promise.all(images.map(async (img) => {
+        const results = [];
+        for (const img of images) {
           const r = await fetch(img.url);
           const buf = await r.arrayBuffer();
           const b64 = arrayBufferToBase64(buf);
-          return { image: b64, mime: r.headers.get('Content-Type') || 'image/jpeg', ...img };
-        }));
+          results.push({
+            image: b64,
+            mime: r.headers.get('Content-Type') || 'image/jpeg',
+            ...img,
+          });
+        }
         return json({
           object: 'image.generation',
           id: `gen_${requestId.replace(/-/g, '').slice(0, 24)}`,
@@ -278,12 +319,27 @@ export default {
       }
 
       if (format === 'markdown') {
-        const text = images.map((img, i) => `**Image ${i + 1}**\n![generated](${img.url})`).join('\n\n');
+        const text = images
+          .map((img, i) => `**Image ${i + 1}**\n![generated](${img.url})`)
+          .join('\n\n');
         return json({ text, images }, 200, cors, security);
       }
 
       if (format === 'html') {
-        const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(prompt)}</title><meta property="og:image" content="${images[0].url}"><meta property="og:title" content="${escapeHtml(prompt)}"></head><body style="font-family:system-ui;background:#111;color:#eee;text-align:center;padding:20px"><h1>${escapeHtml(prompt)}</h1>${images.map(i => `<img src="${i.url}" style="max-width:100%;border-radius:8px;margin:8px 0">`).join('')}</body></html>`;
+        const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>${escapeHtml(prompt)}</title>
+  <meta property="og:image" content="${images[0].url}">
+  <meta property="og:title" content="${escapeHtml(prompt)}">
+</head>
+<body style="font-family:system-ui;background:#111;color:#eee;text-align:center;padding:20px">
+  <h1>${escapeHtml(prompt)}</h1>
+  ${images.map(i => `<img src="${i.url}" style="max-width:100%;border-radius:8px;margin:8px 0">`).join('')}
+</body>
+</html>`;
         return new Response(html, {
           status: 200,
           headers: { 'Content-Type': 'text/html; charset=utf-8', ...cors, ...security },
@@ -359,17 +415,17 @@ function buildImageUrl(prompt, width, height, style, negative, enhance, crop, up
   if (enhance) params.set('enhance', 'true');
   if (negative) params.set('negative', negative);
 
-  const base = `https://image.pollinations.ai/prompt/${encodeURIComponent(finalPrompt)}`;
-  let raw = `${base}?${params}`;
+  // Encode prompt, then swap %20 → + (survives wsrv.nl wrapping cleanly)
+  const safePrompt = encodeURIComponent(finalPrompt).replace(/%20/g, '+');
+  const raw = `https://image.pollinations.ai/prompt/${safePrompt}?${params}`;
+
+  if (!crop && upscale === 1) return raw;
 
   const croppedHeight = crop ? Math.floor(height * 0.94) : height;
   const upW = Math.min(width * upscale, 4096);
   const upH = Math.min(croppedHeight * upscale, 4096);
 
-  if (crop || upscale > 1) {
-    return `https://wsrv.nl/?url=${encodeURIComponent(raw)}&w=${upW}&h=${upH}&fit=cover&a=top`;
-  }
-  return raw;
+  return `https://wsrv.nl/?url=${encodeURIComponent(raw)}&w=${upW}&h=${upH}&fit=cover&a=top`;
 }
 
 function clampInt(v, min, max, fallback) {
@@ -404,7 +460,11 @@ function error(status, type, message, cors, security) {
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
   }[c]));
 }
 
@@ -418,7 +478,9 @@ function arrayBufferToBase64(buffer) {
   return btoa(binary);
 }
 
-// ---------- Signed tokens ----------
+// ============================================
+// Signed token (HMAC-SHA256 + base64url)
+// ============================================
 
 async function encodeToken(payload, secret) {
   const data = JSON.stringify(payload);
@@ -444,9 +506,11 @@ async function decodeToken(token, secret) {
 async function hmacSign(secret, message) {
   const enc = new TextEncoder();
   const key = await crypto.subtle.importKey(
-    'raw', enc.encode(secret),
+    'raw',
+    enc.encode(secret),
     { name: 'HMAC', hash: 'SHA-256' },
-    false, ['sign']
+    false,
+    ['sign']
   );
   const sig = await crypto.subtle.sign('HMAC', key, enc.encode(message));
   return base64UrlEncode(new Uint8Array(sig));
@@ -459,7 +523,9 @@ function base64UrlEncode(bytes) {
 }
 
 function base64UrlDecode(str) {
-  const padded = str.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - str.length % 4) % 4);
+  const padded =
+    str.replace(/-/g, '+').replace(/_/g, '/') +
+    '='.repeat((4 - (str.length % 4)) % 4);
   const bin = atob(padded);
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
