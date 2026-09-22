@@ -1,126 +1,219 @@
 // ============================================
-// IMAGE API — Pollinations backend
-// GET  /api/image?prompt=...&key=...&steps=...&width=...&height=...&crop=true
-// POST /api/image  { prompt, steps, width, height, crop }
+// Image Generation API v1.0.0
+// Copyright (c) 2026 All rights reserved.
 // ============================================
+
+const SERVICE_NAME = 'image-api';
+const SERVICE_VERSION = '1.0.0';
+const DEFAULT_WIDTH = 1024;
+const DEFAULT_HEIGHT = 1024;
 
 export default {
   async fetch(request, env) {
+    const started = Date.now();
+    const requestId = crypto.randomUUID();
+
+    // ---------- CORS + Security headers ----------
     const cors = {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Request-Id',
+      'Access-Control-Max-Age': '86400',
+    };
+
+    const security = {
+      'X-Content-Type-Options': 'nosniff',
+      'X-Frame-Options': 'DENY',
+      'Referrer-Policy': 'no-referrer',
+      'X-Request-Id': requestId,
     };
 
     if (request.method === 'OPTIONS') {
-      return new Response(null, { headers: cors });
+      return new Response(null, { status: 204, headers: { ...cors, ...security } });
     }
 
     const url = new URL(request.url);
 
-    // ---------- Health ----------
+    // ---------- GET /  (service info) ----------
     if (url.pathname === '/' && request.method === 'GET') {
-      return Response.json({ status: 'online', backend: 'pollinations' }, { headers: cors });
+      return json({
+        service: SERVICE_NAME,
+        version: SERVICE_VERSION,
+        status: 'operational',
+        documentation: 'https://docs.example.com',
+      }, 200, cors, security);
     }
 
-    // ---------- GET /api/image ----------
-    if (url.pathname === '/api/image' && request.method === 'GET') {
-      const key = url.searchParams.get('key');
-      if (!env.API_KEY || key !== env.API_KEY) {
-        return Response.json({ error: 'Unauthorized' }, { status: 401, headers: cors });
-      }
-
-      const prompt = (url.searchParams.get('prompt') || '').trim();
-      if (!prompt) {
-        return Response.json({ error: 'prompt required' }, { status: 400, headers: cors });
-      }
-      if (prompt.length > 2000) {
-        return Response.json({ error: 'prompt too long (max 2000 chars)' }, { status: 400, headers: cors });
-      }
-
-      const width = clampInt(url.searchParams.get('width'), 256, 1536, 1024);
-      const height = clampInt(url.searchParams.get('height'), 256, 1536, 1024);
-      const crop = url.searchParams.get('crop') !== 'false'; // default: crop watermark
-      const model = url.searchParams.get('model') || 'flux';
-
-      const imageUrl = buildPollinationsUrl(prompt, width, height, model, crop);
-
-      return Response.json({
-        success: true,
-        image: imageUrl,
-        prompt,
-        width,
-        height,
-        cropped: crop,
-        model,
-      }, { headers: cors });
+    // ---------- GET /v1/health ----------
+    if (url.pathname === '/v1/health' && request.method === 'GET') {
+      return json({
+        status: 'ok',
+        timestamp: new Date().toISOString(),
+        latency_ms: Date.now() - started,
+      }, 200, cors, security);
     }
 
-    // ---------- POST /api/image ----------
-    if (url.pathname === '/api/image' && request.method === 'POST') {
-      const auth = request.headers.get('Authorization') || '';
-      const key = auth.replace('Bearer ', '').trim();
-      if (!env.API_KEY || key !== env.API_KEY) {
-        return Response.json({ error: 'Unauthorized' }, { status: 401, headers: cors });
-      }
+    // ---------- GET /v1/version ----------
+    if (url.pathname === '/v1/version' && request.method === 'GET') {
+      return json({
+        version: SERVICE_VERSION,
+        api_level: 1,
+      }, 200, cors, security);
+    }
 
+    // ---------- GET /v1/image ----------
+    if (url.pathname === '/v1/image' && request.method === 'GET') {
+      return handleGenerate(request, env, url.searchParams, 'key', cors, security, requestId);
+    }
+
+    // ---------- POST /v1/image ----------
+    if (url.pathname === '/v1/image' && request.method === 'POST') {
       let body;
       try { body = await request.json(); } catch {
-        return Response.json({ error: 'Invalid JSON' }, { status: 400, headers: cors });
+        return error(400, 'invalid_request', 'Request body must be valid JSON', cors, security);
       }
-
-      const prompt = (body?.prompt || '').toString().trim();
-      if (!prompt) {
-        return Response.json({ error: 'prompt required' }, { status: 400, headers: cors });
-      }
-      if (prompt.length > 2000) {
-        return Response.json({ error: 'prompt too long (max 2000 chars)' }, { status: 400, headers: cors });
-      }
-
-      const width = clampInt(body.width, 256, 1536, 1024);
-      const height = clampInt(body.height, 256, 1536, 1024);
-      const crop = body.crop !== false;
-      const model = body.model || 'flux';
-
-      const imageUrl = buildPollinationsUrl(prompt, width, height, model, crop);
-
-      return Response.json({
-        success: true,
-        image: imageUrl,
-        prompt,
-        width,
-        height,
-        cropped: crop,
-        model,
-      }, { headers: cors });
+      return handleGenerate(request, env, body, 'header', cors, security, requestId);
     }
 
-    return Response.json({ error: 'Not found' }, { status: 404, headers: cors });
+    return error(404, 'not_found', 'The requested resource does not exist', cors, security);
   },
 };
 
-// ---------- Helpers ----------
+// ============================================
+// Handlers
+// ============================================
 
-function clampInt(value, min, max, fallback) {
-  const n = parseInt(value);
-  if (isNaN(n)) return fallback;
-  return Math.min(Math.max(n, min), max);
+async function handleGenerate(request, env, source, authMode, cors, security, requestId) {
+  const started = Date.now();
+
+  // --- Authentication ---
+  let key;
+  if (authMode === 'key') {
+    key = source.get ? source.get('key') : null;
+  } else {
+    const auth = request.headers.get('Authorization') || '';
+    key = auth.startsWith('Bearer ') ? auth.slice(7).trim() : null;
+  }
+
+  if (!env.API_KEY || !key) {
+    return error(401, 'unauthorized', 'Missing authentication credentials', cors, security);
+  }
+  if (!timingSafeEqual(key, env.API_KEY)) {
+    return error(401, 'unauthorized', 'Invalid authentication credentials', cors, security);
+  }
+
+  // --- Input validation ---
+  const getParam = (name) => (source.get ? source.get(name) : source[name]);
+
+  const prompt = String(getParam('prompt') || '').trim();
+  if (!prompt) {
+    return error(400, 'invalid_request', "Parameter 'prompt' is required", cors, security);
+  }
+  if (prompt.length > 2000) {
+    return error(400, 'invalid_request', "Parameter 'prompt' exceeds maximum length of 2000 characters", cors, security);
+  }
+
+  const width = clampInt(getParam('width'), 256, 1536, DEFAULT_WIDTH);
+  const height = clampInt(getParam('height'), 256, 1536, DEFAULT_HEIGHT);
+  const model = sanitizeModel(getParam('model'));
+  const crop = getParam('crop') !== 'false' && getParam('crop') !== false;
+  const seed = getParam('seed') ? parseInt(getParam('seed')) : Math.floor(Math.random() * 1e9);
+
+  if (width === null) {
+    return error(400, 'invalid_request', "Parameter 'width' must be an integer between 256 and 1536", cors, security);
+  }
+  if (height === null) {
+    return error(400, 'invalid_request', "Parameter 'height' must be an integer between 256 and 1536", cors, security);
+  }
+  if (model === null) {
+    return error(400, 'invalid_request', "Parameter 'model' is not supported", cors, security);
+  }
+
+  // --- Build internal request ---
+  const imageUrl = buildImageUrl(prompt, width, height, model, seed, crop);
+
+  // --- Response ---
+  return json({
+    object: 'image.generation',
+    id: `gen_${requestId.replace(/-/g, '').slice(0, 24)}`,
+    created: Math.floor(Date.now() / 1000),
+    data: [{
+      url: imageUrl,
+      width,
+      height,
+      cropped: crop,
+      model,
+    }],
+    usage: {
+      latency_ms: Date.now() - started,
+    },
+  }, 200, cors, security);
 }
 
-function buildPollinationsUrl(prompt, width, height, model, crop) {
+// ============================================
+// Utilities
+// ============================================
+
+function json(body, status, cors, security) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+      ...cors,
+      ...security,
+    },
+  });
+}
+
+function error(status, code, message, cors, security) {
+  return json({
+    error: {
+      type: code,
+      message,
+      status,
+    },
+  }, status, cors, security);
+}
+
+function clampInt(value, min, max, fallback) {
+  if (value === undefined || value === null || value === '') return fallback;
+  const n = parseInt(value);
+  if (isNaN(n)) return null;
+  if (n < min || n > max) return null;
+  return n;
+}
+
+function sanitizeModel(value) {
+  const allowed = ['flux', 'turbo', 'kontext'];
+  if (!value) return 'flux';
+  const v = String(value).toLowerCase();
+  return allowed.includes(v) ? v : null;
+}
+
+function timingSafeEqual(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  if (a.length !== b.length) return false;
+  let result = 0;
+  for (let i = 0; i < a.length; i++) {
+    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return result === 0;
+}
+
+function buildImageUrl(prompt, width, height, model, seed, crop) {
   const base = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}`;
   const params = new URLSearchParams({
     width: String(width),
     height: String(height),
-    model: model,
+    model,
     nologo: 'true',
-    seed: String(Math.floor(Math.random() * 1e9)),
+    seed: String(seed),
   });
   const rawUrl = `${base}?${params.toString()}`;
 
   if (!crop) return rawUrl;
 
-  // Crop bottom 6% where the watermark sits
   const croppedHeight = Math.floor(height * 0.94);
   return `https://wsrv.nl/?url=${encodeURIComponent(rawUrl)}&w=${width}&h=${croppedHeight}&fit=cover&a=top`;
 }
