@@ -9,3 +9,4 @@ binding = "AI"
 binding = "DB"
 database_name = "kabirx-db"
 database_id = "YOUR_D1_DATABASE_ID"
+
