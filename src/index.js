@@ -1,6 +1,6 @@
 const SERVICE = {
   name: 'image-api',
-  version: '2.3.9',
+  version: '2.4.0',
 };
 
 const DEFAULT_RATIO = '1:1';
@@ -303,7 +303,9 @@ function parseImageParams(url, body = {}, accept = '', method = 'GET', opts = {}
   const n = intParam(get, 'n', 1, 1, 4);
   const upscale = intParam(get, 'upscale', 1, 1, 4);
   const enhance = toBoolean(get('enhance'), false);
-  const crop = toBoolean(get('crop'), false);
+  // Crop defaults to TRUE so the wsrv.nl crop wrapper strips the Pollinations
+  // watermark. Pass ?crop=false to get the raw uncropped image.
+  const crop = toBoolean(get('crop'), true);
 
   const styleStr = asString(get('style'), 'style');
   const style = styleStr ? styleStr.toLowerCase() : undefined;
@@ -507,9 +509,6 @@ async function proxyImageFromToken(request, env, token) {
 
 /* =========================================================
    RESPONSE BUILDER
-   Each branch returns { response, status, error }.
-   id is threaded from handleImage so the response id matches
-   the generations row.
 ========================================================= */
 
 async function resolveImageResponse(id, params, images, tokenResults, started) {
@@ -660,7 +659,6 @@ ${imgs}
 
 /* =========================================================
    GENERATE IMAGE
-   Single outcome → single saveGeneration call.
 ========================================================= */
 
 async function handleImage(request, env, params) {
@@ -689,8 +687,6 @@ async function handleImage(request, env, params) {
     seed: payload.seed,
   }));
 
-  // Record zero-image failures via the same outcome path so the
-  // generations row is written exactly once regardless of branch.
   const outcome = images.length === 0
     ? {
         response: errorResponse('No images produced', 500, 'NO_IMAGES'),
@@ -816,8 +812,6 @@ async function handleGenerations(request, env, url) {
     const offsetN = Number(url.searchParams.get('offset'));
     const offset = Number.isFinite(offsetN) ? clamp(Math.floor(offsetN), 0, 100000) : 0;
 
-    // COUNT(*) is skipped when ?with_total=false to avoid a second
-    // D1 round-trip on large tables.
     const withTotal = url.searchParams.get('with_total') !== 'false';
 
     const result = await env.DB.prepare(
@@ -885,9 +879,6 @@ async function handleGeneration(request, env, url, id) {
    HEALTH / ROOT
 ========================================================= */
 
-// DB probe is opt-in via ?deep=true. When D1 is not bound at all,
-// deep returns status "not_configured" and stays 200 — DB is
-// optional throughout this Worker.
 async function handleHealth(env, url) {
   const deep = url.searchParams.get('deep') === 'true';
   let database = null;
@@ -937,9 +928,9 @@ function handleRoot() {
       get_default_format: 'raw',
       raw_multi_image: 'format=raw|redirect returns only the first image when n>1',
       result_data: 'result_data is returned as a parsed object, not a JSON string',
-      health_deep: 'Add ?deep=true to /v1/health to include a D1 probe. When D1 is not bound, returns "not_configured" and stays 200.',
+      health_deep: 'Add ?deep=true to /v1/health to include a D1 probe.',
       generations_total: 'Add ?with_total=false to /v1/generations to skip the COUNT(*) query.',
-      empty_post: 'POST with no body and no Content-Type is treated as a query-string call.',
+      crop_default: 'Images are cropped by default to remove the upstream watermark. Pass ?crop=false for the raw uncropped image.',
     },
     endpoints: {
       health: '/v1/health',
@@ -992,7 +983,6 @@ export default {
         (request.method === 'GET' || request.method === 'POST') &&
         url.pathname === '/v1/image'
       ) {
-        // Authenticate before touching the body.
         if (!isMasterKey(request, env, url)) {
           return errorResponse('Unauthorized', 401, 'UNAUTHORIZED');
         }
@@ -1000,7 +990,6 @@ export default {
         let body = {};
 
         if (request.method === 'POST') {
-          // Fast reject on header, malformed treated as oversized.
           const lenHeader = request.headers.get('Content-Length');
           if (lenHeader !== null) {
             const len = Number(lenHeader);
@@ -1020,8 +1009,6 @@ export default {
             return errorResponse('Request body too large', 413, 'PAYLOAD_TOO_LARGE');
           }
 
-          // CT is only required when a body is actually present.
-          // Empty POST (no body) falls through as a query-string call.
           if (buf.byteLength > 0) {
             const ct = (request.headers.get('Content-Type') || '').toLowerCase();
             if (!ct || !ct.includes('application/json')) {
