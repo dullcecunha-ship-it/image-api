@@ -1,116 +1,83 @@
 // ============================================================
-// KabirX Image Generation API v2.3.0
-// Cloudflare Worker + D1 + Pollinations
+// KabirX Image Generation API
+// Version: 2.4.0
 // ============================================================
 
 const SERVICE = {
-  name: "image-api",
-  version: "2.3.0",
+  name: 'image-api',
+  version: '2.4.0',
 };
 
-// ============================================================
-// CONFIG
-// ============================================================
-
-const POLLINATIONS_BASE = "https://image.pollinations.ai/prompt/";
-const WSRV_BASE = "https://wsrv.nl/";
+/* =========================================================
+   STYLES
+========================================================= */
 
 const STYLES = {
-  photo: {
-    model: "flux-realism",
-    prefix:
-      "photorealistic, detailed, 85mm lens, natural lighting, ",
-  },
-
-  anime: {
-    model: "flux-anime",
-    prefix:
-      "anime style, vibrant colors, detailed illustration, ",
-  },
-
-  art: {
-    model: "flux",
-    prefix:
-      "digital art, concept art, highly detailed, ",
-  },
-
-  "3d": {
-    model: "flux-3d",
-    prefix:
-      "3D render, octane render, unreal engine, cinematic lighting, ",
-  },
-
-  dark: {
-    model: "any-dark",
-    prefix:
-      "dark moody atmosphere, dramatic shadows, ",
-  },
-
-  fast: {
-    model: "turbo",
-    prefix: "",
-  },
-
-  cinem: {
-    model: "flux",
-    prefix:
-      "cinematic shot, anamorphic lens, film grain, 35mm, ",
-  },
-
-  paint: {
-    model: "flux",
-    prefix:
-      "oil painting, impressionist style, thick brush strokes, ",
-  },
-
-  sketch: {
-    model: "flux",
-    prefix:
-      "pencil sketch, hand-drawn, cross-hatching, graphite, ",
-  },
+  photo:      { model: 'flux-realism', prefix: 'photorealistic, detailed, 85mm lens, natural lighting, ' },
+  anime:      { model: 'flux-anime',   prefix: 'anime style, studio ghibli inspired, vibrant colors, ' },
+  art:        { model: 'flux',         prefix: 'digital art, concept art, trending on artstation, ' },
+  '3d':       { model: 'flux-3d',      prefix: '3D render, octane render, unreal engine, cinematic lighting, ' },
+  dark:       { model: 'any-dark',     prefix: 'dark moody atmosphere, dramatic shadows, ' },
+  fast:       { model: 'turbo',        prefix: '' },
+  cinem:      { model: 'flux',         prefix: 'cinematic shot, anamorphic lens, film grain, 35mm, ' },
+  paint:      { model: 'flux',         prefix: 'oil painting, impressionist style, thick brush strokes, ' },
+  sketch:     { model: 'flux',         prefix: 'pencil sketch, hand-drawn, cross-hatching, graphite, ' },
+  fantasy:    { model: 'flux',         prefix: 'epic fantasy art, magical atmosphere, detailed environment, ' },
+  cyberpunk:  { model: 'flux',         prefix: 'cyberpunk, neon lights, futuristic city, cinematic atmosphere, ' },
+  portrait:   { model: 'flux-realism', prefix: 'professional portrait photography, realistic skin, studio lighting, ' },
+  product:    { model: 'flux',         prefix: 'professional product photography, clean composition, studio lighting, ' },
+  cinematic:  { model: 'flux',         prefix: 'cinematic photography, dramatic composition, volumetric lighting, ' },
+  watercolor: { model: 'flux',         prefix: 'watercolor painting, soft washes, artistic paper texture, ' },
+  vintage:    { model: 'flux',         prefix: 'vintage photography, nostalgic atmosphere, film grain, ' },
+  realistic:  { model: 'flux-realism', prefix: 'highly realistic photography, natural details, realistic lighting, ' },
 };
+
+/* =========================================================
+   RATIOS
+========================================================= */
 
 const RATIOS = {
-  "1:1": [1024, 1024],
-  "16:9": [1344, 768],
-  "9:16": [768, 1344],
-  "4:3": [1152, 896],
-  "3:4": [896, 1152],
-  "21:9": [1536, 640],
-  "3:2": [1216, 832],
-  "2:3": [832, 1216],
+  '1:1':  [1024, 1024],
+  '16:9': [1344, 768],
+  '9:16': [768, 1344],
+  '4:3':  [1152, 896],
+  '3:4':  [896, 1152],
+  '21:9': [1536, 640],
+  '3:2':  [1216, 832],
+  '2:3':  [832, 1216],
 };
 
-// ============================================================
-// HELPERS
-// ============================================================
+/* =========================================================
+   HEADERS
+========================================================= */
 
-function json(data, status = 200, extraHeaders = {}) {
-  return new Response(JSON.stringify(data, null, 2), {
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-API-Key, Accept',
+  'Access-Control-Max-Age': '86400',
+};
+
+const SECURITY_HEADERS = {
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'SAMEORIGIN',
+  'Referrer-Policy': 'no-referrer',
+  'Cache-Control': 'no-store',
+};
+
+function headers(extra = {}) {
+  return { ...CORS_HEADERS, ...SECURITY_HEADERS, ...extra };
+}
+
+function json(data, status = 200, extra = {}) {
+  return new Response(JSON.stringify(data), {
     status,
-    headers: {
-      "Content-Type": "application/json; charset=utf-8",
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Headers":
-        "Content-Type, Authorization, X-API-Key",
-      "Access-Control-Allow-Methods":
-        "GET, POST, OPTIONS",
-      ...extraHeaders,
-    },
+    headers: headers({ 'Content-Type': 'application/json; charset=utf-8', ...extra }),
   });
 }
 
-function error(message, status = 400, code = "BAD_REQUEST") {
-  return json(
-    {
-      success: false,
-      error: {
-        code,
-        message,
-      },
-    },
-    status
-  );
+function errorResponse(message, status = 400, code = 'BAD_REQUEST') {
+  return json({ success: false, error: { code, message } }, status);
 }
 
 function uuid() {
@@ -121,174 +88,321 @@ function now() {
   return Date.now();
 }
 
-function clampNumber(value, min, max, fallback) {
-  const number = Number(value);
-
-  if (!Number.isFinite(number)) {
-    return fallback;
-  }
-
-  return Math.min(max, Math.max(min, number));
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
 }
 
-function parseBoolean(value, fallback = false) {
-  if (value === undefined || value === null) {
-    return fallback;
-  }
-
-  if (typeof value === "boolean") {
-    return value;
-  }
-
-  return ["1", "true", "yes", "on"].includes(
-    String(value).toLowerCase()
-  );
+function toBoolean(value, fallback = false) {
+  if (value === undefined || value === null || value === '') return fallback;
+  if (typeof value === 'boolean') return value;
+  return ['1', 'true', 'yes', 'on'].includes(String(value).trim().toLowerCase());
 }
 
-function getClientIp(request) {
-  return (
-    request.headers.get("CF-Connecting-IP") ||
-    request.headers.get("X-Forwarded-For") ||
-    "unknown"
-  );
-}
+/* =========================================================
+   CONSTANT-TIME COMPARISON
+========================================================= */
 
-function getBearerToken(request) {
-  const authorization =
-    request.headers.get("Authorization") || "";
-
-  if (!authorization.toLowerCase().startsWith("bearer ")) {
-    return null;
+function timingSafeEqual(a, b) {
+  a = String(a);
+  b = String(b);
+  const aBytes = new TextEncoder().encode(a);
+  const bBytes = new TextEncoder().encode(b);
+  let result = aBytes.length ^ bBytes.length;
+  const length = Math.max(aBytes.length, bBytes.length);
+  for (let i = 0; i < length; i++) {
+    result |= (aBytes[i] || 0) ^ (bBytes[i] || 0);
   }
-
-  return authorization.slice(7).trim() || null;
-}
-
-function getApiKey(request, url) {
-  return (
-    getBearerToken(request) ||
-    request.headers.get("X-API-Key") ||
-    url.searchParams.get("key") ||
-    null
-  );
-}
-
-// ============================================================
-// SECURITY
-// ============================================================
-
-function safeEqual(a, b) {
-  if (!a || !b) {
-    return false;
-  }
-
-  const encoder = new TextEncoder();
-
-  const aa = encoder.encode(String(a));
-  const bb = encoder.encode(String(b));
-
-  if (aa.length !== bb.length) {
-    return false;
-  }
-
-  let result = 0;
-
-  for (let i = 0; i < aa.length; i++) {
-    result |= aa[i] ^ bb[i];
-  }
-
   return result === 0;
 }
 
-async function sha256(value) {
-  const data = new TextEncoder().encode(value);
+/* =========================================================
+   BASE64URL
+========================================================= */
 
-  const hash = await crypto.subtle.digest(
-    "SHA-256",
-    data
-  );
+function base64UrlEncode(value) {
+  const bytes =
+    typeof value === 'string'
+      ? new TextEncoder().encode(value)
+      : value instanceof Uint8Array
+        ? value
+        : new Uint8Array(value);
 
-  return [...new Uint8Array(hash)]
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+
+  return btoa(binary)
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
 }
+
+function base64UrlDecode(value) {
+  const normalized = String(value).replace(/-/g, '+').replace(/_/g, '/');
+  const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return new TextDecoder().decode(bytes);
+}
+
+function bytesToBase64(bytes) {
+  const encoded = base64UrlEncode(bytes);
+  return encoded
+    .replace(/-/g, '+')
+    .replace(/_/g, '/')
+    .padEnd(Math.ceil(encoded.length / 4) * 4, '=');
+}
+
+/* =========================================================
+   HMAC SIGNING
+========================================================= */
 
 async function hmacSign(value, secret) {
-  const encoder = new TextEncoder();
-
   const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(secret),
-    {
-      name: "HMAC",
-      hash: "SHA-256",
-    },
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
     false,
-    ["sign"]
+    ['sign'],
   );
-
   const signature = await crypto.subtle.sign(
-    "HMAC",
+    'HMAC',
     key,
-    encoder.encode(value)
+    new TextEncoder().encode(value),
   );
-
-  return [...new Uint8Array(signature)]
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  return base64UrlEncode(new Uint8Array(signature));
 }
 
-async function authenticateMaster(request, env) {
-  const url = new URL(request.url);
-  const supplied = getApiKey(request, url);
-
-  if (!env.MASTER_API_KEY) {
-    return false;
-  }
-
-  return safeEqual(
-    supplied,
-    env.MASTER_API_KEY
-  );
+async function createSignedToken(payload, secret) {
+  const body = base64UrlEncode(JSON.stringify(payload));
+  const signature = await hmacSign(body, secret);
+  return `${body}.${signature}`;
 }
 
-// ============================================================
-// D1
-// ============================================================
+async function verifySignedToken(token, secret) {
+  if (typeof token !== 'string' || token.length > 12000) return null;
 
-async function recordGeneration(env, data) {
-  if (!env.DB) {
-    return;
-  }
+  const parts = token.split('.');
+  if (parts.length !== 2) return null;
+
+  const [body, signature] = parts;
+  if (!body || !signature) return null;
+
+  const expected = await hmacSign(body, secret);
+  if (!timingSafeEqual(signature, expected)) return null;
 
   try {
-    await env.DB.prepare(`
-      INSERT INTO generations (
-        id,
-        user_id,
-        prompt,
-        negative,
-        style,
-        width,
-        height,
-        n,
-        enhance,
-        upscale,
-        seed,
-        status,
-        result_data,
-        error_message,
-        duration_ms,
-        created_at
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `)
+    const payload = JSON.parse(base64UrlDecode(body));
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      return null;
+    }
+    if (payload.exp && Number(payload.exp) < Math.floor(Date.now() / 1000)) {
+      return null;
+    }
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+/* =========================================================
+   AUTH
+========================================================= */
+
+function getBearerToken(request) {
+  const authorization = request.headers.get('Authorization') || '';
+  if (!authorization.toLowerCase().startsWith('bearer ')) return null;
+  const token = authorization.slice(7).trim();
+  return token || null;
+}
+
+function getApiKey(request, url) {
+  const bearer = getBearerToken(request);
+  if (bearer) return bearer;
+
+  const headerKey = request.headers.get('X-API-Key');
+  if (headerKey) return headerKey.trim();
+
+  const queryKey = url.searchParams.get('key');
+  if (queryKey) return queryKey.trim();
+
+  return null;
+}
+
+function isMasterKey(request, env, url) {
+  const supplied = getApiKey(request, url);
+  if (!supplied || !env.MASTER_API_KEY) return false;
+  return timingSafeEqual(supplied, env.MASTER_API_KEY);
+}
+
+/* =========================================================
+   IMAGE PARAMETERS
+========================================================= */
+
+function requestAccept(request) {
+  return request.headers.get('Accept') || '';
+}
+
+function parsePositiveInteger(value) {
+  if (value === undefined || value === null || value === '') return undefined;
+  const number = Number(value);
+  if (!Number.isFinite(number) || !Number.isInteger(number)) return undefined;
+  return number;
+}
+
+function parseImageParams(request, url, body = {}) {
+  const get = (key) => {
+    if (body && typeof body === 'object' && body[key] !== undefined && body[key] !== null) {
+      return body[key];
+    }
+    return url.searchParams.get(key);
+  };
+
+  const promptValue = get('prompt');
+  const prompt = String(promptValue ?? '').trim();
+  if (!prompt) throw new Error('Prompt is required');
+
+  const ratioValue = get('ratio');
+  const ratio =
+    ratioValue === undefined || ratioValue === null || ratioValue === ''
+      ? '1:1'
+      : String(ratioValue);
+
+  let width = parsePositiveInteger(get('width'));
+  let height = parsePositiveInteger(get('height'));
+
+  if (width === undefined || height === undefined) {
+    if (!RATIOS[ratio]) throw new Error(`Invalid ratio: ${ratio}`);
+    [width, height] = RATIOS[ratio];
+  }
+
+  width = clamp(width, 256, 1536);
+  height = clamp(height, 256, 1536);
+
+  const nValue = parsePositiveInteger(get('n'));
+  const n = clamp(nValue === undefined ? 1 : nValue, 1, 4);
+
+  const upscaleValue = parsePositiveInteger(get('upscale'));
+  const upscale = clamp(upscaleValue === undefined ? 1 : upscaleValue, 1, 4);
+
+  const enhance = toBoolean(get('enhance'), false);
+  const crop = toBoolean(get('crop'), false);
+
+  const styleValue = get('style');
+  const style =
+    styleValue !== undefined && styleValue !== null && String(styleValue).trim() !== ''
+      ? String(styleValue).trim().toLowerCase()
+      : undefined;
+
+  if (style && !Object.prototype.hasOwnProperty.call(STYLES, style)) {
+    throw new Error(`Unknown style: ${style}`);
+  }
+
+  const negativeValue = get('negative');
+  const negative =
+    negativeValue !== undefined && negativeValue !== null && String(negativeValue).trim() !== ''
+      ? String(negativeValue).slice(0, 2000)
+      : undefined;
+
+  const seedValue = get('seed');
+  let seed;
+  if (seedValue !== undefined && seedValue !== null && String(seedValue).trim() !== '') {
+    seed = Number(seedValue);
+    if (!Number.isSafeInteger(seed) || seed < 0) {
+      throw new Error('Seed must be a non-negative safe integer');
+    }
+  }
+
+  const formatValue = get('format');
+  let format;
+  if (formatValue !== undefined && formatValue !== null && String(formatValue).trim() !== '') {
+    format = String(formatValue).trim().toLowerCase();
+  } else {
+    const accept = requestAccept(request);
+    format = accept.toLowerCase().includes('application/json') ? 'json' : 'raw';
+  }
+
+  const supportedFormats = ['json', 'raw', 'base64', 'markdown', 'html', 'redirect'];
+  if (!supportedFormats.includes(format)) {
+    throw new Error(`Unsupported format: ${format}`);
+  }
+
+  return {
+    prompt: prompt.slice(0, 2000),
+    negative,
+    style,
+    ratio,
+    width,
+    height,
+    n,
+    enhance,
+    crop,
+    upscale,
+    seed,
+    format,
+  };
+}
+
+/* =========================================================
+   POLLINATIONS URL (INTERNAL)
+========================================================= */
+
+function buildImageUrl(prompt, width, height, style, negative, enhance, crop, upscale, seed) {
+  let finalPrompt = prompt;
+  let model = 'flux';
+
+  if (style && STYLES[style]) {
+    finalPrompt = STYLES[style].prefix + prompt;
+    model = STYLES[style].model;
+  }
+
+  const params = new URLSearchParams({
+    width: String(width),
+    height: String(height),
+    model,
+    nologo: 'true',
+    seed: String(seed ?? Math.floor(Math.random() * 1e9)),
+  });
+
+  if (enhance) params.set('enhance', 'true');
+  if (negative) params.set('negative', negative);
+
+  const safePrompt = encodeURIComponent(finalPrompt).replace(/%20/g, '+');
+  const raw = `https://image.pollinations.ai/prompt/${safePrompt}?${params.toString()}`;
+
+  if (!crop && upscale === 1) return raw;
+
+  const croppedHeight = crop ? Math.floor(height * 0.94) : height;
+  const upW = Math.min(width * upscale, 4096);
+  const upH = Math.min(croppedHeight * upscale, 4096);
+
+  return `https://wsrv.nl/?url=${encodeURIComponent(raw)}&w=${upW}&h=${upH}&fit=cover&a=top`;
+}
+
+/* =========================================================
+   D1 LOGGING
+========================================================= */
+
+async function saveGeneration(env, data) {
+  if (!env.DB) return;
+  try {
+    await env.DB.prepare(
+      `INSERT INTO generations (
+         id, user_id, prompt, negative, style, width, height, n,
+         enhance, upscale, seed, status, result_data, error_message,
+         duration_ms, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
       .bind(
         data.id,
-        data.userId ?? null,
+        data.user_id || null,
         data.prompt,
-        data.negative ?? null,
-        data.style ?? null,
+        data.negative || null,
+        data.style || null,
         data.width,
         data.height,
         data.n,
@@ -296,1071 +410,567 @@ async function recordGeneration(env, data) {
         data.upscale,
         data.seed ?? null,
         data.status,
-        data.resultData
-          ? JSON.stringify(data.resultData)
-          : null,
-        data.errorMessage ?? null,
-        data.durationMs ?? null,
-        data.createdAt
+        data.result_data || null,
+        data.error_message || null,
+        data.duration_ms ?? null,
+        now(),
       )
       .run();
-
-    if (
-      data.status === "completed" &&
-      data.n > 0
-    ) {
-      await env.DB.prepare(`
-        INSERT INTO usage (
-          id,
-          user_id,
-          generation_id,
-          units,
-          created_at
-        )
-        VALUES (?, ?, ?, ?, ?)
-      `)
-        .bind(
-          uuid(),
-          data.userId ?? null,
-          data.id,
-          data.n,
-          data.createdAt
-        )
-        .run();
-    }
-  } catch (err) {
-    // Database logging must never break image generation.
-    console.error(
-      "D1 recordGeneration failed:",
-      err
-    );
-  }
-}
-
-// ============================================================
-// SIGNED IMAGE URL
-// ============================================================
-
-async function createSignedUrl(
-  imageUrl,
-  env,
-  expiresIn = 3600
-) {
-  if (!env.SIGNING_SECRET) {
-    return imageUrl;
-  }
-
-  const expires =
-    Math.floor(Date.now() / 1000) + expiresIn;
-
-  const payload =
-    `${imageUrl}|${expires}`;
-
-  const signature = await hmacSign(
-    payload,
-    env.SIGNING_SECRET
-  );
-
-  const params = new URLSearchParams({
-    url: imageUrl,
-    exp: String(expires),
-    sig: signature,
-  });
-
-  return `/i/${btoa(params.toString())}`;
-}
-
-// ============================================================
-// IMAGE URL
-// ============================================================
-
-function buildPollinationsUrl({
-  prompt,
-  model,
-  width,
-  height,
-  seed,
-  enhance,
-}) {
-  const encodedPrompt = encodeURIComponent(
-    prompt
-  );
-
-  const params = new URLSearchParams({
-    width: String(width),
-    height: String(height),
-    model,
-    nologo: "true",
-  });
-
-  if (seed !== undefined && seed !== null) {
-    params.set("seed", String(seed));
-  }
-
-  if (enhance) {
-    params.set("enhance", "true");
-  }
-
-  return (
-    `${POLLINATIONS_BASE}${encodedPrompt}` +
-    `?${params.toString()}`
-  );
-}
-
-function buildProcessedUrl(
-  imageUrl,
-  width,
-  height,
-  upscale
-) {
-  if (upscale <= 1) {
-    return imageUrl;
-  }
-
-  const params = new URLSearchParams({
-    url: imageUrl,
-    w: String(width * upscale),
-    h: String(height * upscale),
-    fit: "cover",
-    output: "webp",
-    q: "90",
-  });
-
-  return `${WSRV_BASE}?${params.toString()}`;
-}
-
-// ============================================================
-// VALIDATION
-// ============================================================
-
-function validateRequest(body) {
-  if (!body || typeof body !== "object") {
-    return {
-      error: "Request body must be JSON.",
-    };
-  }
-
-  if (
-    typeof body.prompt !== "string" ||
-    !body.prompt.trim()
-  ) {
-    return {
-      error: "prompt is required.",
-    };
-  }
-
-  if (body.prompt.length > 2000) {
-    return {
-      error:
-        "prompt must be 2000 characters or less.",
-    };
-  }
-
-  if (
-    body.negative !== undefined &&
-    typeof body.negative !== "string"
-  ) {
-    return {
-      error: "negative must be a string.",
-    };
-  }
-
-  if (
-    body.style !== undefined &&
-    !STYLES[String(body.style)]
-  ) {
-    return {
-      error: `Unknown style: ${body.style}`,
-    };
-  }
-
-  if (
-    body.ratio !== undefined &&
-    !RATIOS[String(body.ratio)]
-  ) {
-    return {
-      error: `Unknown ratio: ${body.ratio}`,
-    };
-  }
-
-  if (
-    body.n !== undefined &&
-    (
-      !Number.isInteger(Number(body.n)) ||
-      Number(body.n) < 1 ||
-      Number(body.n) > 4
-    )
-  ) {
-    return {
-      error: "n must be an integer between 1 and 4.",
-    };
-  }
-
-  return null;
-}
-
-// ============================================================
-// GENERATION
-// ============================================================
-
-async function generateImages(
-  request,
-  env,
-  options = {}
-) {
-  const started = performance.now();
-
-  let body;
-
-  try {
-    body = await request.json();
   } catch {
-    return error(
-      "Invalid JSON body.",
-      400,
-      "INVALID_JSON"
-    );
+    // DB logging must never break image generation.
   }
+}
 
-  const validation = validateRequest(body);
-
-  if (validation) {
-    return error(
-      validation.error,
-      400,
-      "VALIDATION_ERROR"
-    );
+async function saveUsage(env, generationId, units = 1) {
+  if (!env.DB) return;
+  try {
+    await env.DB.prepare(
+      `INSERT INTO usage (id, generation_id, units, created_at) VALUES (?, ?, ?, ?)`,
+    )
+      .bind(uuid(), generationId, units, now())
+      .run();
+  } catch {
+    // Non-blocking.
   }
+}
 
-  const prompt = body.prompt.trim();
+/* =========================================================
+   SIGNED PUBLIC IMAGE URL
+========================================================= */
 
-  const styleId = body.style
-    ? String(body.style)
-    : "photo";
-
-  const style = STYLES[styleId];
-
-  let width;
-  let height;
-
-  if (body.ratio && RATIOS[body.ratio]) {
-    [width, height] = RATIOS[body.ratio];
-  } else {
-    width = clampNumber(
-      body.width,
-      256,
-      1536,
-      1024
-    );
-
-    height = clampNumber(
-      body.height,
-      256,
-      1536,
-      1024
-    );
-  }
-
-  width = Math.round(width);
-  height = Math.round(height);
-
-  const n = clampNumber(
-    body.n,
-    1,
-    4,
-    1
-  );
-
-  const upscale = clampNumber(
-    body.upscale,
-    1,
-    4,
-    1
-  );
-
-  const enhance = parseBoolean(
-    body.enhance,
-    false
-  );
-
-  const crop = parseBoolean(
-    body.crop,
-    false
-  );
+async function createImageToken(params, env, seedOverride) {
+  const secret = env.SIGNING_SECRET || env.MASTER_API_KEY;
+  if (!secret) throw new Error('Image signing is not configured');
 
   const seed =
-    body.seed !== undefined &&
-    body.seed !== null
-      ? Number(body.seed)
-      : undefined;
+    seedOverride ??
+    params.seed ??
+    Math.floor(Math.random() * 1e9);
 
-  const finalPrompt =
-    style.prefix + prompt;
+  const payload = {
+    v: 1,
+    prompt: params.prompt,
+    negative: params.negative || null,
+    style: params.style || null,
+    ratio: params.ratio,
+    width: params.width,
+    height: params.height,
+    upscale: params.upscale,
+    enhance: params.enhance,
+    crop: params.crop,
+    seed,
+    exp: Math.floor(Date.now() / 1000) + 60 * 60,
+  };
 
-  const generationId = uuid();
-  const createdAt = now();
+  return { token: await createSignedToken(payload, secret), seed };
+}
 
-  const images = [];
+function publicImageUrl(request, token) {
+  const url = new URL(request.url);
+  return `${url.origin}/i/${encodeURIComponent(token)}`;
+}
+
+/* =========================================================
+   IMAGE PROXY
+========================================================= */
+
+async function proxyImageFromToken(request, env, token) {
+  const secret = env.SIGNING_SECRET || env.MASTER_API_KEY;
+  if (!secret) {
+    return errorResponse('Image service is not configured', 500, 'SIGNING_NOT_CONFIGURED');
+  }
+
+  const payload = await verifySignedToken(token, secret);
+  if (!payload) {
+    return errorResponse('Invalid or expired image URL', 401, 'INVALID_IMAGE_TOKEN');
+  }
+
+  if (
+    typeof payload.prompt !== 'string' ||
+    !Number.isInteger(payload.width) ||
+    !Number.isInteger(payload.height) ||
+    payload.width < 256 ||
+    payload.width > 1536 ||
+    payload.height < 256 ||
+    payload.height > 1536 ||
+    !Number.isInteger(payload.upscale) ||
+    payload.upscale < 1 ||
+    payload.upscale > 4 ||
+    typeof payload.enhance !== 'boolean' ||
+    typeof payload.crop !== 'boolean'
+  ) {
+    return errorResponse('Invalid image token payload', 401, 'INVALID_IMAGE_TOKEN');
+  }
 
   try {
-    for (let i = 0; i < n; i++) {
-      const currentSeed =
-        seed !== undefined
-          ? seed + i
-          : undefined;
+    const upstreamUrl = buildImageUrl(
+      payload.prompt,
+      payload.width,
+      payload.height,
+      payload.style,
+      payload.negative,
+      payload.enhance,
+      payload.crop,
+      payload.upscale,
+      payload.seed,
+    );
 
-      const originalUrl =
-        buildPollinationsUrl({
-          prompt: finalPrompt,
-          model: style.model,
-          width,
-          height,
-          seed: currentSeed,
-          enhance,
-        });
+    const upstream = await fetch(upstreamUrl, {
+      method: 'GET',
+      headers: { Accept: 'image/avif,image/webp,image/png,image/jpeg,*/*' },
+      cf: { cacheEverything: true },
+    });
 
-      let imageUrl = originalUrl;
+    if (!upstream.ok) {
+      return errorResponse('Image generation failed', 502, 'UPSTREAM_IMAGE_ERROR');
+    }
 
-      if (upscale > 1 || crop) {
-        imageUrl = buildProcessedUrl(
-          originalUrl,
-          width,
-          height,
-          upscale
-        );
-      }
+    const contentType = upstream.headers.get('Content-Type') || 'image/jpeg';
 
-      const signedUrl =
-        await createSignedUrl(
-          imageUrl,
-          env
-        );
+    return new Response(upstream.body, {
+      status: 200,
+      headers: headers({
+        'Content-Type': contentType,
+        'Cache-Control': 'public, max-age=3600',
+      }),
+    });
+  } catch {
+    return errorResponse('Unable to retrieve image', 502, 'IMAGE_FETCH_FAILED');
+  }
+}
 
-      images.push({
-        index: i,
-        url: signedUrl,
-        source_url: imageUrl,
-        width,
-        height,
-        seed: currentSeed ?? null,
+/* =========================================================
+   GENERATE IMAGE — now honors n
+========================================================= */
+
+async function handleImage(request, env, params) {
+  const started = performance.now();
+  const id = uuid();
+
+  try {
+    // Build one token per requested image, each with a distinct seed.
+    const tokenResults = [];
+    for (let i = 0; i < params.n; i++) {
+      const seedForThis =
+        params.seed !== undefined ? params.seed + i : undefined;
+      tokenResults.push(await createImageToken(params, env, seedForThis));
+    }
+
+    const images = tokenResults.map(({ token, seed }) => ({
+      url: publicImageUrl(request, token),
+      seed,
+      width: params.width,
+      height: params.height,
+      style: params.style || null,
+      ratio: params.ratio,
+      upscale: params.upscale,
+      enhanced: params.enhance,
+      cropped: params.crop,
+    }));
+
+    const firstUrl = images[0].url;
+
+    const duration = Math.round(performance.now() - started);
+
+    await saveGeneration(env, {
+      id,
+      prompt: params.prompt,
+      negative: params.negative,
+      style: params.style,
+      width: params.width,
+      height: params.height,
+      n: params.n,
+      enhance: params.enhance,
+      upscale: params.upscale,
+      seed: params.seed,
+      status: 'completed',
+      result_data: JSON.stringify({ images }),
+      duration_ms: duration,
+    });
+
+    await saveUsage(env, id, params.n);
+
+    // ---------- raw / redirect ----------
+    if (params.format === 'raw' || params.format === 'redirect') {
+      return Response.redirect(firstUrl, 302);
+    }
+
+    // ---------- json ----------
+    if (params.format === 'json') {
+      return json({
+        success: true,
+        id,
+        object: 'image.generation',
+        created: Math.floor(Date.now() / 1000),
+        data: images,
+        urls: images.map((i) => i.url),
+        width: params.width,
+        height: params.height,
+        n: params.n,
+        style: params.style || null,
       });
     }
 
-    const durationMs = Math.round(
-      performance.now() - started
-    );
+    // ---------- markdown ----------
+    if (params.format === 'markdown') {
+      const markdown = images
+        .map((img) => `![${escapeMarkdown(params.prompt)}](${img.url})`)
+        .join('\n\n');
+      return json({
+        success: true,
+        id,
+        markdown,
+        urls: images.map((i) => i.url),
+        width: params.width,
+        height: params.height,
+        n: params.n,
+      });
+    }
 
-    const result = {
-      id: generationId,
-      status: "completed",
-      prompt,
-      negative:
-        body.negative ?? null,
-      style: styleId,
-      model: style.model,
-      ratio:
-        body.ratio ??
-        null,
-      width,
-      height,
-      n,
-      upscale,
-      enhance,
-      crop,
-      seed:
-        seed ?? null,
-      images,
-      duration_ms: durationMs,
-      created_at: createdAt,
-    };
+    // ---------- html ----------
+    if (params.format === 'html') {
+      const alt = escapeHtml(params.prompt);
+      const imgs = images
+        .map((img) => `<img src="${escapeHtml(img.url)}" alt="${alt}">`)
+        .join('\n');
+      const html = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>KabirX Image</title>
+<style>
+html,body{margin:0;min-height:100%;background:#111}
+body{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:center}
+img{max-width:100%;max-height:100vh;object-fit:contain}
+</style>
+</head>
+<body>
+${imgs}
+</body>
+</html>`;
+      return new Response(html, {
+        status: 200,
+        headers: headers({ 'Content-Type': 'text/html; charset=utf-8' }),
+      });
+    }
 
-    await recordGeneration(env, {
-      id: generationId,
-      userId: options.userId ?? null,
-      prompt,
-      negative: body.negative,
-      style: styleId,
-      width,
-      height,
-      n,
-      enhance,
-      upscale,
-      seed,
-      status: "completed",
-      resultData: result,
-      durationMs,
-      createdAt,
-    });
+    // ---------- base64 ----------
+    if (params.format === 'base64') {
+      const results = [];
+      for (const img of images) {
+        const response = await fetch(img.url, {
+          headers: { Accept: 'image/avif,image/webp,image/png,image/jpeg,*/*' },
+        });
+        if (!response.ok) {
+          return errorResponse(
+            'Unable to retrieve generated image',
+            502,
+            'IMAGE_FETCH_FAILED',
+          );
+        }
+        const buffer = await response.arrayBuffer();
+        const base64 = bytesToBase64(new Uint8Array(buffer));
+        results.push({
+          url: img.url,
+          seed: img.seed,
+          mime_type: response.headers.get('Content-Type') || 'image/jpeg',
+          base64,
+        });
+      }
+      return json({
+        success: true,
+        id,
+        width: params.width,
+        height: params.height,
+        n: params.n,
+        data: results,
+      });
+    }
 
-    return json({
-      success: true,
-      data: result,
-    });
+    return errorResponse('Unsupported format', 400, 'UNSUPPORTED_FORMAT');
   } catch (err) {
-    const durationMs = Math.round(
-      performance.now() - started
-    );
-
-    await recordGeneration(env, {
-      id: generationId,
-      userId: options.userId ?? null,
-      prompt,
-      negative: body.negative,
-      style: styleId,
-      width,
-      height,
-      n,
-      enhance,
-      upscale,
-      seed,
-      status: "failed",
-      errorMessage:
-        err instanceof Error
-          ? err.message
-          : "Generation failed.",
-      durationMs,
-      createdAt,
-    });
-
-    console.error(
-      "Generation failed:",
-      err
-    );
-
-    return error(
-      "Image generation failed.",
+    return errorResponse(
+      err instanceof Error ? err.message : 'Image generation failed',
       502,
-      "GENERATION_FAILED"
+      'IMAGE_GENERATION_FAILED',
     );
   }
 }
 
-// ============================================================
-// GENERATION HISTORY
-// ============================================================
+/* =========================================================
+   ESCAPING
+========================================================= */
 
-async function listGenerations(
-  request,
-  env
-) {
-  if (!env.DB) {
-    return error(
-      "Database is not configured.",
-      503,
-      "DATABASE_UNAVAILABLE"
-    );
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function escapeMarkdown(value) {
+  return String(value)
+    .replace(/\\/g, '\\\\')
+    .replace(/\[/g, '\\[')
+    .replace(/\]/g, '\\]')
+    .replace(/\(/g, '\\(')
+    .replace(/\)/g, '\\)');
+}
+
+/* =========================================================
+   SIGN ENDPOINT
+========================================================= */
+
+async function handleSign(request, env, url) {
+  if (!isMasterKey(request, env, url)) {
+    return errorResponse('Unauthorized', 401, 'UNAUTHORIZED');
   }
 
-  const url = new URL(request.url);
+  try {
+    const params = parseImageParams(request, url, {});
+    const { token, seed } = await createImageToken(params, env);
 
-  const limit = clampNumber(
-    url.searchParams.get("limit"),
-    1,
-    100,
-    20
-  );
+    return json({
+      success: true,
+      token,
+      url: publicImageUrl(request, token),
+      seed,
+      expires_in: 3600,
+    });
+  } catch (error) {
+    return errorResponse(
+      error instanceof Error ? error.message : 'Invalid parameters',
+      400,
+      'INVALID_PARAMETERS',
+    );
+  }
+}
 
-  const offset = clampNumber(
-    url.searchParams.get("offset"),
-    0,
-    100000,
-    0
-  );
+/* =========================================================
+   STYLES / RATIOS
+========================================================= */
+
+function handleStyles() {
+  return json({
+    success: true,
+    styles: Object.entries(STYLES).map(([id]) => ({ id, name: id })),
+  });
+}
+
+function handleRatios() {
+  return json({
+    success: true,
+    ratios: Object.entries(RATIOS).map(([id, [w, h]]) => ({
+      id,
+      width: w,
+      height: h,
+    })),
+  });
+}
+
+/* =========================================================
+   GENERATIONS
+========================================================= */
+
+async function handleGenerations(request, env, url) {
+  if (!isMasterKey(request, env, url)) {
+    return errorResponse('Unauthorized', 401, 'UNAUTHORIZED');
+  }
+  if (!env.DB) {
+    return errorResponse('Database unavailable', 503, 'DATABASE_UNAVAILABLE');
+  }
 
   try {
-    const result = await env.DB.prepare(`
-      SELECT
-        id,
-        user_id,
-        prompt,
-        negative,
-        style,
-        width,
-        height,
-        n,
-        enhance,
-        upscale,
-        seed,
-        status,
-        result_data,
-        error_message,
-        duration_ms,
-        created_at
-      FROM generations
-      ORDER BY created_at DESC
-      LIMIT ? OFFSET ?
-    `)
-      .bind(
-        Math.round(limit),
-        Math.round(offset)
-      )
+    const requestedLimit = Number(url.searchParams.get('limit') || 20);
+    if (!Number.isFinite(requestedLimit)) {
+      return errorResponse('Invalid limit', 400, 'INVALID_PARAMETERS');
+    }
+    const limit = clamp(Math.floor(requestedLimit), 1, 100);
+
+    const result = await env.DB.prepare(
+      `SELECT id, prompt, negative, style, width, height, n,
+              enhance, upscale, seed, status, result_data, error_message,
+              duration_ms, created_at
+       FROM generations
+       ORDER BY created_at DESC
+       LIMIT ?`,
+    )
+      .bind(limit)
       .all();
 
     return json({
       success: true,
-      data: result.results || [],
-      pagination: {
-        limit: Math.round(limit),
-        offset: Math.round(offset),
-      },
+      generations: result.results || [],
     });
-  } catch (err) {
-    console.error(
-      "History query failed:",
-      err
-    );
-
-    return error(
-      "Unable to load generation history.",
-      500,
-      "DATABASE_ERROR"
-    );
+  } catch {
+    return errorResponse('Unable to retrieve generations', 500, 'DATABASE_ERROR');
   }
 }
 
-async function getGeneration(
-  request,
-  env,
-  id
-) {
+async function handleGeneration(request, env, url, id) {
+  if (!isMasterKey(request, env, url)) {
+    return errorResponse('Unauthorized', 401, 'UNAUTHORIZED');
+  }
   if (!env.DB) {
-    return error(
-      "Database is not configured.",
-      503,
-      "DATABASE_UNAVAILABLE"
-    );
+    return errorResponse('Database unavailable', 503, 'DATABASE_UNAVAILABLE');
+  }
+  if (!id || id.length > 200) {
+    return errorResponse('Invalid generation ID', 400, 'INVALID_PARAMETERS');
   }
 
   try {
-    const result = await env.DB.prepare(`
-      SELECT *
-      FROM generations
-      WHERE id = ?
-      LIMIT 1
-    `)
+    const result = await env.DB.prepare(
+      `SELECT id, prompt, negative, style, width, height, n,
+              enhance, upscale, seed, status, result_data, error_message,
+              duration_ms, created_at
+       FROM generations
+       WHERE id = ?
+       LIMIT 1`,
+    )
       .bind(id)
       .first();
 
     if (!result) {
-      return error(
-        "Generation not found.",
-        404,
-        "NOT_FOUND"
-      );
+      return errorResponse('Generation not found', 404, 'NOT_FOUND');
     }
 
-    return json({
-      success: true,
-      data: result,
-    });
-  } catch (err) {
-    console.error(
-      "Generation lookup failed:",
-      err
-    );
-
-    return error(
-      "Unable to load generation.",
-      500,
-      "DATABASE_ERROR"
-    );
-  }
-}
-
-// ============================================================
-// SIGNED IMAGE ROUTE
-// ============================================================
-
-async function serveSignedImage(
-  request,
-  env,
-  token
-) {
-  if (!env.SIGNING_SECRET) {
-    return error(
-      "Signing is not configured.",
-      503,
-      "SIGNING_UNAVAILABLE"
-    );
-  }
-
-  let decoded;
-
-  try {
-    decoded = atob(token);
+    return json({ success: true, generation: result });
   } catch {
-    return error(
-      "Invalid image token.",
-      400,
-      "INVALID_TOKEN"
-    );
-  }
-
-  const params = new URLSearchParams(
-    decoded
-  );
-
-  const imageUrl = params.get("url");
-  const exp = Number(
-    params.get("exp")
-  );
-  const signature = params.get("sig");
-
-  if (
-    !imageUrl ||
-    !exp ||
-    !signature
-  ) {
-    return error(
-      "Invalid image token.",
-      400,
-      "INVALID_TOKEN"
-    );
-  }
-
-  if (
-    Math.floor(Date.now() / 1000) >
-    exp
-  ) {
-    return error(
-      "Image URL has expired.",
-      410,
-      "EXPIRED"
-    );
-  }
-
-  const expected =
-    await hmacSign(
-      `${imageUrl}|${exp}`,
-      env.SIGNING_SECRET
-    );
-
-  if (
-    !safeEqual(
-      signature,
-      expected
-    )
-  ) {
-    return error(
-      "Invalid image signature.",
-      403,
-      "INVALID_SIGNATURE"
-    );
-  }
-
-  try {
-    const response = await fetch(
-      imageUrl
-    );
-
-    if (!response.ok) {
-      return error(
-        "Unable to retrieve image.",
-        502,
-        "UPSTREAM_ERROR"
-      );
-    }
-
-    const headers =
-      new Headers(response.headers);
-
-    headers.set(
-      "Cache-Control",
-      "public, max-age=3600"
-    );
-
-    headers.set(
-      "Access-Control-Allow-Origin",
-      "*"
-    );
-
-    return new Response(
-      response.body,
-      {
-        status: response.status,
-        headers,
-      }
-    );
-  } catch (err) {
-    console.error(
-      "Signed image fetch failed:",
-      err
-    );
-
-    return error(
-      "Unable to retrieve image.",
-      502,
-      "UPSTREAM_ERROR"
-    );
+    return errorResponse('Unable to retrieve generation', 500, 'DATABASE_ERROR');
   }
 }
 
-// ============================================================
-// ROUTER
-// ============================================================
+/* =========================================================
+   HEALTH / ROOT
+========================================================= */
+
+async function handleHealth(env) {
+  let database = false;
+  if (env.DB) {
+    try {
+      await env.DB.prepare('SELECT 1').first();
+      database = true;
+    } catch {
+      database = false;
+    }
+  }
+
+  return json({
+    success: true,
+    service: SERVICE.name,
+    version: SERVICE.version,
+    status: database ? 'healthy' : 'degraded',
+    database,
+    timestamp: new Date().toISOString(),
+  });
+}
+
+function handleRoot() {
+  return json({
+    success: true,
+    service: SERVICE.name,
+    version: SERVICE.version,
+    status: 'online',
+    endpoints: {
+      health: '/v1/health',
+      styles: '/v1/styles',
+      ratios: '/v1/ratios',
+      image: '/v1/image',
+      sign: '/v1/sign',
+      generations: '/v1/generations',
+    },
+  });
+}
+
+/* =========================================================
+   ROUTER
+========================================================= */
 
 export default {
   async fetch(request, env) {
-    const url = new URL(
-      request.url
-    );
+    const url = new URL(request.url);
 
-    // --------------------------------------------------------
-    // CORS PREFLIGHT
-    // --------------------------------------------------------
-
-    if (
-      request.method === "OPTIONS"
-    ) {
-      return new Response(null, {
-        status: 204,
-        headers: {
-          "Access-Control-Allow-Origin":
-            "*",
-          "Access-Control-Allow-Headers":
-            "Content-Type, Authorization, X-API-Key",
-          "Access-Control-Allow-Methods":
-            "GET, POST, OPTIONS",
-          "Access-Control-Max-Age":
-            "86400",
-        },
-      });
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: headers() });
     }
 
-    // --------------------------------------------------------
-    // ROOT
-    // --------------------------------------------------------
+    try {
+      if (request.method === 'GET' && url.pathname === '/') {
+        return handleRoot();
+      }
 
-    if (
-      request.method === "GET" &&
-      url.pathname === "/"
-    ) {
-      return json({
-        success: true,
-        service: SERVICE.name,
-        version: SERVICE.version,
-        status: "online",
-        endpoints: {
-          health: "/v1/health",
-          styles: "/v1/styles",
-          ratios: "/v1/ratios",
-          generate: "/v1/images/generate",
-          legacy_generate: "/v1/image",
-          generations: "/v1/generations",
-        },
-      });
-    }
+      if (request.method === 'GET' && url.pathname === '/v1/health') {
+        return handleHealth(env);
+      }
 
-    // --------------------------------------------------------
-    // HEALTH
-    // --------------------------------------------------------
+      if (request.method === 'GET' && url.pathname === '/v1/styles') {
+        return handleStyles();
+      }
 
-    if (
-      request.method === "GET" &&
-      url.pathname === "/v1/health"
-    ) {
-      let database = false;
+      if (request.method === 'GET' && url.pathname === '/v1/ratios') {
+        return handleRatios();
+      }
 
-      if (env.DB) {
+      if (request.method === 'GET' && url.pathname === '/v1/sign') {
+        return handleSign(request, env, url);
+      }
+
+      if (request.method === 'GET' && url.pathname.startsWith('/i/')) {
+        const token = decodeURIComponent(url.pathname.slice(3));
+        return proxyImageFromToken(request, env, token);
+      }
+
+      if (request.method === 'GET' && url.pathname === '/v1/generations') {
+        return handleGenerations(request, env, url);
+      }
+
+      if (request.method === 'GET' && url.pathname.startsWith('/v1/generations/')) {
+        const id = decodeURIComponent(url.pathname.slice('/v1/generations/'.length));
+        return handleGeneration(request, env, url, id);
+      }
+
+      if (
+        (request.method === 'GET' || request.method === 'POST') &&
+        url.pathname === '/v1/image'
+      ) {
+        let body = {};
+
+        if (request.method === 'POST') {
+          const contentType = request.headers.get('Content-Type') || '';
+          if (contentType.toLowerCase().includes('application/json')) {
+            try {
+              body = await request.json();
+            } catch {
+              return errorResponse('Invalid JSON body', 400, 'INVALID_JSON');
+            }
+            if (!body || typeof body !== 'object' || Array.isArray(body)) {
+              return errorResponse('JSON body must be an object', 400, 'INVALID_JSON');
+            }
+          }
+        }
+
+        if (!isMasterKey(request, env, url)) {
+          return errorResponse('Unauthorized', 401, 'UNAUTHORIZED');
+        }
+
         try {
-          await env.DB
-            .prepare(
-              "SELECT 1 AS ok"
-            )
-            .first();
-
-          database = true;
-        } catch {
-          database = false;
+          const params = parseImageParams(request, url, body);
+          return handleImage(request, env, params);
+        } catch (error) {
+          return errorResponse(
+            error instanceof Error ? error.message : 'Invalid parameters',
+            400,
+            'INVALID_PARAMETERS',
+          );
         }
       }
 
-      return json({
-        success: true,
-        service: SERVICE.name,
-        version: SERVICE.version,
-        status: "healthy",
-        database,
-        timestamp: new Date().toISOString(),
-      });
+      return errorResponse('Not found', 404, 'NOT_FOUND');
+    } catch {
+      return errorResponse('Internal server error', 500, 'INTERNAL_ERROR');
     }
-
-    // --------------------------------------------------------
-    // STYLES
-    // --------------------------------------------------------
-
-    if (
-      request.method === "GET" &&
-      url.pathname === "/v1/styles"
-    ) {
-      return json({
-        success: true,
-        data: Object.entries(
-          STYLES
-        ).map(
-          ([id, value]) => ({
-            id,
-            model: value.model,
-          })
-        ),
-      });
-    }
-
-    // --------------------------------------------------------
-    // RATIOS
-    // --------------------------------------------------------
-
-    if (
-      request.method === "GET" &&
-      url.pathname === "/v1/ratios"
-    ) {
-      return json({
-        success: true,
-        data: Object.entries(
-          RATIOS
-        ).map(
-          ([id, dimensions]) => ({
-            id,
-            width: dimensions[0],
-            height: dimensions[1],
-          })
-        ),
-      });
-    }
-
-    // --------------------------------------------------------
-    // SIGNED IMAGE
-    // --------------------------------------------------------
-
-    if (
-      request.method === "GET" &&
-      url.pathname.startsWith(
-        "/i/"
-      )
-    ) {
-      const token =
-        url.pathname.slice(3);
-
-      return serveSignedImage(
-        request,
-        env,
-        token
-      );
-    }
-
-    // --------------------------------------------------------
-    // GENERATION HISTORY
-    // --------------------------------------------------------
-
-    if (
-      request.method === "GET" &&
-      url.pathname ===
-        "/v1/generations"
-    ) {
-      const authenticated =
-        await authenticateMaster(
-          request,
-          env
-        );
-
-      if (!authenticated) {
-        return error(
-          "Authentication required.",
-          401,
-          "UNAUTHORIZED"
-        );
-      }
-
-      return listGenerations(
-        request,
-        env
-      );
-    }
-
-    // --------------------------------------------------------
-    // SINGLE GENERATION
-    // --------------------------------------------------------
-
-    if (
-      request.method === "GET" &&
-      url.pathname.startsWith(
-        "/v1/generations/"
-      )
-    ) {
-      const authenticated =
-        await authenticateMaster(
-          request,
-          env
-        );
-
-      if (!authenticated) {
-        return error(
-          "Authentication required.",
-          401,
-          "UNAUTHORIZED"
-        );
-      }
-
-      const id =
-        url.pathname.slice(
-          "/v1/generations/".length
-        );
-
-      if (!id) {
-        return error(
-          "Generation ID is required.",
-          400
-        );
-      }
-
-      return getGeneration(
-        request,
-        env,
-        id
-      );
-    }
-
-    // --------------------------------------------------------
-    // IMAGE GENERATION
-    // --------------------------------------------------------
-
-    if (
-      request.method === "POST" &&
-      (
-        url.pathname ===
-          "/v1/images/generate" ||
-        url.pathname ===
-          "/v1/image"
-      )
-    ) {
-      const authenticated =
-        await authenticateMaster(
-          request,
-          env
-        );
-
-      if (!authenticated) {
-        return error(
-          "Authentication required.",
-          401,
-          "UNAUTHORIZED"
-        );
-      }
-
-      return generateImages(
-        request,
-        env
-      );
-    }
-
-    // --------------------------------------------------------
-    // LEGACY GET /v1/image
-    // --------------------------------------------------------
-
-    if (
-      request.method === "GET" &&
-      url.pathname === "/v1/image"
-    ) {
-      const authenticated =
-        await authenticateMaster(
-          request,
-          env
-        );
-
-      if (!authenticated) {
-        return error(
-          "Authentication required.",
-          401,
-          "UNAUTHORIZED"
-        );
-      }
-
-      const prompt =
-        url.searchParams.get(
-          "prompt"
-        );
-
-      if (!prompt) {
-        return error(
-          "prompt is required.",
-          400,
-          "VALIDATION_ERROR"
-        );
-      }
-
-      const body = {
-        prompt,
-        negative:
-          url.searchParams.get(
-            "negative"
-          ) || undefined,
-        style:
-          url.searchParams.get(
-            "style"
-          ) || "photo",
-        ratio:
-          url.searchParams.get(
-            "ratio"
-          ) || undefined,
-        width:
-          url.searchParams.get(
-            "width"
-          ) || undefined,
-        height:
-          url.searchParams.get(
-            "height"
-          ) || undefined,
-        n:
-          url.searchParams.get(
-            "n"
-          ) || 1,
-        upscale:
-          url.searchParams.get(
-            "upscale"
-          ) || 1,
-        enhance:
-          url.searchParams.get(
-            "enhance"
-          ),
-        crop:
-          url.searchParams.get(
-            "crop"
-          ),
-        seed:
-          url.searchParams.get(
-            "seed"
-          ) || undefined,
-      };
-
-      const internalRequest =
-        new Request(
-          request.url,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type":
-                "application/json",
-            },
-            body: JSON.stringify(
-              body
-            ),
-          }
-        );
-
-      return generateImages(
-        internalRequest,
-        env
-      );
-    }
-
-    // --------------------------------------------------------
-    // 404
-    // --------------------------------------------------------
-
-    return error(
-      "Endpoint not found.",
-      404,
-      "NOT_FOUND"
-    );
   },
 };
