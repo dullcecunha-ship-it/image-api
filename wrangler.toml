@@ -8,5 +8,5 @@ binding = "AI"
 [[d1_databases]]
 binding = "DB"
 database_name = "kabirx-db"
-database_id = "YOUR_D1_DATABASE_ID"
+database_id = "19906e55-75e6-444f-a5d1-e4ecef17d021"
 
