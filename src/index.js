@@ -341,7 +341,7 @@ function parseImageParams(url, body = {}, accept = '', method = 'GET', opts = {}
 }
 
 /* =========================================================
-   UPSTREAM
+   IMAGE URL BUILDER
 ========================================================= */
 
 function buildImageUrl(prompt, width, height, style, negative, enhance, crop, upscale, seed) {
@@ -367,7 +367,6 @@ function buildImageUrl(prompt, width, height, style, negative, enhance, crop, up
 
   if (!crop && upscale === 1) return raw;
 
-  // Crop whichever is larger: 90px or 6% of height, capped at 20% of height.
   const minCropPx = 90;
   const pctCropPx = Math.floor(height * 0.06);
   const desiredCrop = Math.max(minCropPx, pctCropPx);
@@ -380,13 +379,13 @@ function buildImageUrl(prompt, width, height, style, negative, enhance, crop, up
   return `https://wsrv.nl/?url=${encodeURIComponent(raw)}&w=${upW}&h=${upH}&fit=cover&a=top`;
 }
 
-async function fetchUpstream(payload) {
-  const upstreamUrl = buildImageUrl(
+async function fetchGenerated(payload) {
+  const imageUrl = buildImageUrl(
     payload.prompt, payload.width, payload.height, payload.style,
     payload.negative, payload.enhance, payload.crop, payload.upscale, payload.seed,
   );
 
-  return fetch(upstreamUrl, {
+  return fetch(imageUrl, {
     method: 'GET',
     headers: { Accept: 'image/avif,image/webp,image/png,image/jpeg,*/*' },
     cf: { cacheEverything: true },
@@ -494,15 +493,15 @@ async function proxyImageFromToken(request, env, token) {
   }
 
   try {
-    const upstream = await fetchUpstream(payload);
-    if (!upstream.ok) {
-      return errorResponse('Image generation failed', 502, 'UPSTREAM_IMAGE_ERROR');
+    const generated = await fetchGenerated(payload);
+    if (!generated.ok) {
+      return errorResponse('Image generation failed', 502, 'IMAGE_GENERATION_FAILED');
     }
 
-    return new Response(upstream.body, {
+    return new Response(generated.body, {
       status: 200,
       headers: headers({
-        'Content-Type': safeImageContentType(upstream.headers.get('Content-Type')),
+        'Content-Type': safeImageContentType(generated.headers.get('Content-Type')),
         'Cache-Control': 'public, max-age=3600',
       }),
     });
@@ -606,22 +605,22 @@ ${imgs}
     let responses;
     try {
       responses = await Promise.all(
-        tokenResults.map(({ payload }) => fetchUpstream(payload)),
+        tokenResults.map(({ payload }) => fetchGenerated(payload)),
       );
     } catch (err) {
       return {
-        response: errorResponse('Upstream image fetch failed', 502, 'UPSTREAM_IMAGE_ERROR'),
+        response: errorResponse('Image generation failed', 502, 'IMAGE_GENERATION_FAILED'),
         status: 'failed',
-        error: err instanceof Error ? err.message : 'fetch failed',
+        error: err instanceof Error ? err.message : 'generation failed',
       };
     }
 
     const bad = responses.find((r) => !r.ok);
     if (bad) {
       return {
-        response: errorResponse('Upstream image fetch failed', 502, 'UPSTREAM_IMAGE_ERROR'),
+        response: errorResponse('Image generation failed', 502, 'IMAGE_GENERATION_FAILED'),
         status: 'failed',
-        error: `Upstream returned ${bad.status}`,
+        error: `Generation returned ${bad.status}`,
       };
     }
 
@@ -919,31 +918,11 @@ function handleRoot() {
     service: SERVICE.name,
     version: SERVICE.version,
     status: 'online',
-    limits: {
-      prompt_bytes: PROMPT_MAX_BYTES,
-      negative_bytes: NEGATIVE_MAX_BYTES,
-      body_bytes: MAX_BODY_BYTES,
-      seed_max: MAX_SEED,
-      token_max_chars: TOKEN_MAX_CHARS,
-    },
-    notes: {
-      dimensions: 'If only one of width/height is supplied, the other is derived from ratio.',
-      post_default_format: 'json',
-      get_default_format: 'raw',
-      raw_multi_image: 'format=raw|redirect returns only the first image when n>1',
-      result_data: 'result_data is returned as a parsed object, not a JSON string',
-      health_deep: 'Add ?deep=true to /v1/health to include a D1 probe.',
-      generations_total: 'Add ?with_total=false to /v1/generations to skip the COUNT(*) query.',
-      crop_default: 'Images are cropped by default to remove the upstream watermark. Pass ?crop=false for the raw uncropped image.',
-    },
     endpoints: {
       health: '/v1/health',
       styles: '/v1/styles',
       ratios: '/v1/ratios',
       image: '/v1/image',
-      image_proxy: '/i/:token',
-      sign: '/v1/sign',
-      generations: '/v1/generations',
     },
   });
 }
