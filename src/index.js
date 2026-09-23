@@ -1,6 +1,6 @@
 const SERVICE = {
   name: 'image-api',
-  version: '2.4.0',
+  version: '2.4.1',
 };
 
 const DEFAULT_RATIO = '1:1';
@@ -303,8 +303,6 @@ function parseImageParams(url, body = {}, accept = '', method = 'GET', opts = {}
   const n = intParam(get, 'n', 1, 1, 4);
   const upscale = intParam(get, 'upscale', 1, 1, 4);
   const enhance = toBoolean(get('enhance'), false);
-  // Crop defaults to TRUE so the wsrv.nl crop wrapper strips the Pollinations
-  // watermark. Pass ?crop=false to get the raw uncropped image.
   const crop = toBoolean(get('crop'), true);
 
   const styleStr = asString(get('style'), 'style');
@@ -369,7 +367,13 @@ function buildImageUrl(prompt, width, height, style, negative, enhance, crop, up
 
   if (!crop && upscale === 1) return raw;
 
-  const croppedHeight = crop ? Math.floor(height * 0.94) : height;
+  // Crop whichever is larger: 90px or 6% of height, capped at 20% of height.
+  const minCropPx = 90;
+  const pctCropPx = Math.floor(height * 0.06);
+  const desiredCrop = Math.max(minCropPx, pctCropPx);
+  const safeCropPx = Math.min(desiredCrop, Math.floor(height * 0.20));
+  const croppedHeight = crop ? height - safeCropPx : height;
+
   const upW = Math.min(width * upscale, 4096);
   const upH = Math.min(croppedHeight * upscale, 4096);
 
